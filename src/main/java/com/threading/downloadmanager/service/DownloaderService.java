@@ -8,6 +8,8 @@ import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 @Service
 public class DownloaderService
@@ -33,9 +35,6 @@ public class DownloaderService
             task.setDownloadStatus(DownloadStatus.RESUMED);
             activeDownloads.put(link,task);
         }
-        con.setRequestMethod("GET");
-        con.setRequestProperty("Range","bytes="+ downloadedBytes +"-");
-        con.connect();
         long totalSize=con.getContentLength();
         double total=totalSize/(1024.0*1024.0);
         task.setFileSize(totalSize);
@@ -57,47 +56,23 @@ public class DownloaderService
             if(task.getFileName()==null) fileName=fileName.substring(0,fileName.indexOf('.'))+ System.currentTimeMillis()+fileName.substring(fileName.indexOf('.'));
             else fileName=task.getFileName();
         }
-        task.setFileName(fileName);
-        System.out.println(con.getResponseCode());
-        System.out.println(con.getHeaderField("Content-Length"));
-        System.out.println(con.getHeaderField("Content-Type"));
-        System.out.println(con.getHeaderField("Accept-Ranges"));
-        System.out.println(con.getHeaderField("Content-Disposition"));
-        try(InputStream in = con.getInputStream();
-            RandomAccessFile raf = new RandomAccessFile(fileName,"rw");)
+        int numberOfThread=4;
+        ExecutorService executor= Executors.newFixedThreadPool(numberOfThread);
+        long chunks=totalSize/numberOfThread;
+        long start=0;
+        long end=0;
+        for(int i=0;i<numberOfThread;i++)
         {
-            raf.seek(downloadedBytes);
-            byte[] buffer = new byte[8192];
-            int bytesRead;
-            long downloaded=0;
-            long start=System.currentTimeMillis();
-            double check=10.0;
-            while (task.getDownloadStatus()==DownloadStatus.RESUMED&&(bytesRead = in.read(buffer)) != -1)
+            start=i*chunks;
+            if(i==3)
             {
-                raf.write(buffer, 0, bytesRead);
-                long end=(System.currentTimeMillis()-start);
-                downloaded+=bytesRead;
-                double curr=downloaded/(1024.0*1024);
-                double speed=(curr*1000.0)/(end);
-                double per=(curr*100.0)/total;
-                if(check<=per) {
-                    System.out.print("#");
-                    check += 10;
-                }
+                end=totalSize;
             }
-            task.setDownloadedSize(downloadedBytes+downloaded);
-            if(downloaded==totalSize)
+            else
             {
-                task.setDownloadStatus(DownloadStatus.COMPLETED);
+                end=start+chunks-1;
             }
-            activeDownloads.put(link,task);
-            System.out.println(task.getFileName());
-            System.out.println(task.getDownloadedSize());
-            System.out.println(task.getDownloadStatus());
-            System.out.println(task.getFileSize());
-            System.out.println();
-        } catch (FileNotFoundException e) {
-            throw new RuntimeException(e);
+            executor.submit(new DownloaderThread(start,end,link,fileName));
         }
         con.disconnect();
     }

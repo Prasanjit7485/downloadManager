@@ -25,6 +25,7 @@ public class DownloaderController
     {
         downloaderService.pauseDownload(url);
         return ResponseEntity.ok("Success");
+
     }
 
 }
