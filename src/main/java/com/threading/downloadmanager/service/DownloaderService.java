@@ -1,5 +1,6 @@
 package com.threading.downloadmanager.service;
 
+import com.threading.downloadmanager.entity.DownloadChunk;
 import com.threading.downloadmanager.entity.DownloaderTask;
 import com.threading.downloadmanager.enums.DownloadStatus;
 import org.springframework.stereotype.Service;
@@ -7,9 +8,8 @@ import org.springframework.stereotype.Service;
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Service
 public class DownloaderService
@@ -56,6 +56,9 @@ public class DownloaderService
             if(task.getFileName()==null) fileName=fileName.substring(0,fileName.indexOf('.'))+ System.currentTimeMillis()+fileName.substring(fileName.indexOf('.'));
             else fileName=task.getFileName();
         }
+        System.out.println("Downloading "+fileName);
+        System.out.println("Total Bytes "+totalSize);
+        AtomicLong totalDownloaded = new AtomicLong(0);
         int numberOfThread=4;
         ExecutorService executor= Executors.newFixedThreadPool(numberOfThread);
         long chunks=totalSize/numberOfThread;
@@ -66,14 +69,32 @@ public class DownloaderService
             start=i*chunks;
             if(i==3)
             {
-                end=totalSize;
+                end=totalSize-1;
             }
             else
             {
                 end=start+chunks-1;
             }
-            executor.submit(new DownloaderThread(start,end,link,fileName));
+            DownloadChunk downloadChunk=new DownloadChunk();
+            downloadChunk.setStart(start);
+            downloadChunk.setEnd(end);
+            executor.submit(new DownloaderThread(link,fileName,downloadChunk,totalDownloaded));
         }
+        ScheduledExecutorService progressExecutor=Executors.newSingleThreadScheduledExecutor();
+        long[] previousBytes={0};
+        progressExecutor.scheduleAtFixedRate(() -> {
+            long currentBytes=totalDownloaded.get();
+            long bytesDownloaded=currentBytes-previousBytes[0];
+            double speed=bytesDownloaded/0.5;
+            double progress = ((double)currentBytes/totalSize)* 100.0;
+            System.out.printf(
+                    "Progress: %.2f%% | Speed: %.2f MB/s%n",
+                    progress,
+                    speed / (1024 * 1024)
+            );
+            previousBytes[0] = currentBytes;
+        }, 0, 500, TimeUnit.MILLISECONDS);
+        System.out.println("Downloaded "+totalDownloaded.get());
         con.disconnect();
     }
     public void pauseDownload(String link) {
