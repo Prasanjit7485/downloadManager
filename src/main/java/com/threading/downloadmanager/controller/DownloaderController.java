@@ -24,7 +24,7 @@ public class DownloaderController
     public ResponseEntity<String> pause(@RequestParam String  url) throws IOException
     {
         downloaderService.pauseDownload(url);
-        return ResponseEntity.ok("Success");
+        return ResponseEntity.ok("Paused");
 
     }
 
