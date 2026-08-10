@@ -8,6 +8,9 @@ import org.springframework.stereotype.Service;
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.*;
@@ -105,7 +108,8 @@ public class DownloaderService
                     speed / (1024 * 1024)
             );
             previousBytes[0] = currentBytes;
-            if(task.getDownloadStatus()==DownloadStatus.COMPLETED||task.getDownloadStatus()==DownloadStatus.PAUSED) progressExecutor.shutdown();
+            if(currentBytes==totalSize) task.setDownloadStatus(DownloadStatus.COMPLETED);
+            if(task.getDownloadStatus()!=DownloadStatus.RESUMED) progressExecutor.shutdown();
         }, 0, 500, TimeUnit.MILLISECONDS);
         System.out.println("Downloaded "+totalDownloaded.get());
         task.setDownloaderThreads(downloaderThreadList);
@@ -126,5 +130,22 @@ public class DownloaderService
             downloaderThread.pause();
         }
         System.out.println("Downloading is paused");
+    }
+    public void cancelDownload(String link)
+    {
+        DownloaderTask task=activeDownloads.get(link);
+        pauseDownload(link);
+        task.setDownloadStatus(DownloadStatus.CANCELED);
+        String fileName=task.getFileName();
+        Path path= Paths.get(fileName);
+        try
+        {
+            Files.deleteIfExists(path);
+            System.out.println("Downloading is canceled");
+        }
+        catch (IOException e)
+        {
+            System.out.println(e.getMessage());
+        }
     }
 }

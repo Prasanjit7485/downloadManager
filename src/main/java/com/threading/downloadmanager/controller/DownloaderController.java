@@ -27,5 +27,11 @@ public class DownloaderController
         return ResponseEntity.ok("Paused");
 
     }
+    @DeleteMapping("/cancel")
+    public ResponseEntity<String> cancel(@RequestParam String  url) throws IOException
+    {
+        downloaderService.cancelDownload(url);
+        return ResponseEntity.ok("Cancelled");
+    }
 
 }
