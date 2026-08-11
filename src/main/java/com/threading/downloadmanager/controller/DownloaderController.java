@@ -25,7 +25,6 @@ public class DownloaderController
     {
         downloaderService.pauseDownload(url);
         return ResponseEntity.ok("Paused");
-
     }
     @DeleteMapping("/cancel")
     public ResponseEntity<String> cancel(@RequestParam String  url) throws IOException

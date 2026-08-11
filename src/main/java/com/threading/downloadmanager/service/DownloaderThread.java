@@ -45,6 +45,7 @@ public class DownloaderThread implements Runnable {
                             " Response: " + con.getResponseCode()
             );
             long total=end-start+1;
+            long downloadedBytes=0;
             long s=System.currentTimeMillis();
             long bytes=end-start+1;
             try (InputStream in = con.getInputStream();
@@ -60,11 +61,19 @@ public class DownloaderThread implements Runnable {
                         break;
                     }
                     raf.write(buffer, 0, bytesRead);
+                    downloadedBytes+=bytesRead;
                     downloadChunk.addDownloadedBytes(bytesRead);
                     totalDownloaded.addAndGet(bytesRead);
                 }
             }
-            //downloadChunk.setDownloadStatus(DownloadStatus.COMPLETED);
+            if(downloadedBytes==total)
+            {
+                downloadChunk.setDownloadStatus(DownloadStatus.COMPLETED);
+            }
+            else if(downloadChunk.getDownloadStatus()!=DownloadStatus.PAUSED)
+            {
+                downloadChunk.setDownloadStatus(DownloadStatus.FAILED);
+            }
             long e=System.currentTimeMillis();
             double speed=(total*1000.0)/(s-e+1);
             speed/=(1024.0);
@@ -73,6 +82,9 @@ public class DownloaderThread implements Runnable {
             con.disconnect();
         }
         catch (IOException e)        {
+            downloadChunk.setDownloadStatus(
+                    DownloadStatus.FAILED
+            );
             throw new RuntimeException(e);
         }
     }

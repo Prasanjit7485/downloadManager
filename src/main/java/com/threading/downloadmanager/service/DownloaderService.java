@@ -92,14 +92,25 @@ public class DownloaderService
             downloadChunk.setStart(start);
             downloadChunk.setEnd(end);
             DownloaderThread downloaderThread=new DownloaderThread(link,fileName,downloadChunk,totalDownloaded,task);
+            if(downloadChunk.getDownloadStatus()==DownloadStatus.FAILED)
+            {
+                downloaderThread=new DownloaderThread(link,fileName,downloadChunk,totalDownloaded,task);
+            }
             downloaderThreadList.add(downloaderThread);
             executor.submit(downloaderThread);
         }
         ScheduledExecutorService progressExecutor=Executors.newSingleThreadScheduledExecutor();
         long[] previousBytes={0};
+        final int Breaktime=2000;
+        int currtime[]={0};
         progressExecutor.scheduleAtFixedRate(() -> {
             long currentBytes=totalDownloaded.get();
             long bytesDownloaded=currentBytes-previousBytes[0];
+            if(bytesDownloaded==0)
+            {
+                currtime[0]+=500;
+            }
+            else if(bytesDownloaded>0) currtime[0]=0;
             double speed=bytesDownloaded/0.5;
             double progress = ((double)currentBytes/totalSize)* 100.0;
             System.out.printf(
@@ -109,7 +120,7 @@ public class DownloaderService
             );
             previousBytes[0] = currentBytes;
             if(currentBytes==totalSize) task.setDownloadStatus(DownloadStatus.COMPLETED);
-            if(task.getDownloadStatus()!=DownloadStatus.RESUMED) progressExecutor.shutdown();
+            if(task.getDownloadStatus()!=DownloadStatus.RESUMED||currtime[0]==Breaktime) progressExecutor.shutdown();
         }, 0, 500, TimeUnit.MILLISECONDS);
         System.out.println("Downloaded "+totalDownloaded.get());
         task.setDownloaderThreads(downloaderThreadList);
