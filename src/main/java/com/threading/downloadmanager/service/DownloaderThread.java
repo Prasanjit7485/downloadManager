@@ -2,6 +2,7 @@ package com.threading.downloadmanager.service;
 import com.threading.downloadmanager.entity.DownloadChunk;
 import com.threading.downloadmanager.entity.DownloaderTask;
 import com.threading.downloadmanager.enums.DownloadStatus;
+import jakarta.transaction.Transactional;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -11,21 +12,20 @@ import java.net.URL;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class DownloaderThread implements Runnable {
-    private DownloadChunk downloadChunk;
-    private AtomicLong totalDownloaded;
+    private final DownloadChunk downloadChunk;
     private final String link;
     private final String fileName;
     private final DownloaderTask downloaderTask;
     private volatile HttpURLConnection con;
 
-    public DownloaderThread(String link, String fileName, DownloadChunk downloadChunk, AtomicLong totalDownloaded,DownloaderTask downloaderTask) {
+    public DownloaderThread(String link, String fileName, DownloadChunk downloadChunk,DownloaderTask downloaderTask) {
         this.link = link;
         this.fileName = fileName;
         this.downloadChunk = downloadChunk;
-        this.totalDownloaded = totalDownloaded;
         this.downloaderTask = downloaderTask;
     }
     @Override
+    @Transactional
     public void run()
     {
         try
@@ -33,7 +33,7 @@ public class DownloaderThread implements Runnable {
             URL url = new URL(link);
             con=(HttpURLConnection) url.openConnection();
             con.setRequestMethod("GET");
-            long start=downloadChunk.getStart()+downloadChunk.getDownloadedBytes().get();
+            long start=downloadChunk.getStart()+downloadChunk.getDownloadedBytes();
             long end=downloadChunk.getEnd();
             if(start>end) return;
             con.setRequestProperty("Range", "bytes=" + start + "-" + end);
@@ -49,7 +49,7 @@ public class DownloaderThread implements Runnable {
             long s=System.currentTimeMillis();
             long bytes=end-start+1;
             try (InputStream in = con.getInputStream();
-                 RandomAccessFile raf = new RandomAccessFile(fileName, "rw");) {
+                 RandomAccessFile raf = new RandomAccessFile(fileName, "rw")) {
                 raf.seek(start);
                 byte[] buffer = new byte[8192];
                 int bytesRead;
@@ -62,9 +62,10 @@ public class DownloaderThread implements Runnable {
                     }
                     raf.write(buffer, 0, bytesRead);
                     downloadedBytes+=bytesRead;
-                    downloadChunk.addDownloadedBytes(bytesRead);
-                    totalDownloaded.addAndGet(bytesRead);
+                    downloaderTask.setDownloadedSize(downloadedBytes+downloaderTask.getDownloadedSize());
+                    downloadChunk.setDownloadedBytes(downloadedBytes);
                 }
+
             }
             if(downloadedBytes==total)
             {

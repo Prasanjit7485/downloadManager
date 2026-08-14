@@ -1,8 +1,12 @@
 package com.threading.downloadmanager.service;
 
+import com.threading.downloadmanager.DTO.DownloaderTaskDTO;
 import com.threading.downloadmanager.entity.DownloadChunk;
 import com.threading.downloadmanager.entity.DownloaderTask;
 import com.threading.downloadmanager.enums.DownloadStatus;
+import com.threading.downloadmanager.exception.DownloaderTaskException;
+import com.threading.downloadmanager.repository.DownloaderTaskRepository;
+import jakarta.transaction.Transactional;
 import org.springframework.stereotype.Service;
 
 import java.io.*;
@@ -11,44 +15,28 @@ import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.ArrayList;
 import java.util.List;
+import java.util.Queue;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicLong;
 
 @Service
 public class DownloaderService
 {
-    //Thread Safe HashMap use for storage the task
-    ConcurrentHashMap<String, DownloaderTask> activeDownloads = new ConcurrentHashMap<>();
-    public void startDownloading(String link) throws IOException
+    private final DownloaderTaskRepository downloaderTaskRepository;
+    public DownloaderService(DownloaderTaskRepository downloaderTaskRepository)
     {
-        //converting into URL
+        this.downloaderTaskRepository = downloaderTaskRepository;
+    }
+    //Thread Safe HashMap use for storage the task
+    ConcurrentHashMap<Long, List<DownloaderThread>> activeDownloads = new ConcurrentHashMap<>();
+    Queue<Long> downloaderTaskQueue = new ConcurrentLinkedQueue<>();
+    public void addDownloaderTask(DownloaderTaskDTO downloaderTaskDTO) throws IOException {
+        String link=downloaderTaskDTO.getUrl();
         URL url=new URL(link);
-        //setting up connection
         HttpURLConnection con=(HttpURLConnection)url.openConnection();
-        DownloaderTask task;
-        long downloadedBytes =0;
         String fileName="";
-        if(activeDownloads.containsKey(link))
-        {
-            task=activeDownloads.get(link);
-            if(task.getDownloadStatus()==DownloadStatus.COMPLETED) return;
-            task.setDownloadStatus(DownloadStatus.RESUMED);
-        }
-        else
-        {
-            task=new DownloaderTask();
-            task.setUrl(link);
-            task.setDownloadStatus(DownloadStatus.RESUMED);
-            activeDownloads.put(link,task);
-        }
-
         long totalSize=con.getContentLength();
-        double total=totalSize/(1024.0*1024.0);
-        task.setFileSize(totalSize);
         String disposition=con.getHeaderField("Content-Disposition");
-
         if(disposition!=null&&disposition.contains("filename="))
         {
             fileName = disposition.substring(
@@ -57,19 +45,35 @@ public class DownloaderService
         }
         if(fileName.isEmpty())
         {
-            fileName="download"+System.currentTimeMillis() + ".bin";
+            fileName="download"+System.currentTimeMillis()+ ".bin";
         }
         File file=new File(fileName);
         if(file.exists())
         {
-            if(task.getFileName()==null) fileName=fileName.substring(0,fileName.indexOf('.'))+ System.currentTimeMillis()+fileName.substring(fileName.indexOf('.'));
-            else fileName=task.getFileName();
+            fileName=fileName.substring(0,fileName.indexOf('.'))+ System.currentTimeMillis()+fileName.substring(fileName.indexOf('.'));
         }
-        task.setFileName(fileName);
+        downloaderTaskDTO.setFileName(fileName);
+        downloaderTaskDTO.setFileSize(totalSize);
+        downloaderTaskDTO.setDownloadStatus(DownloadStatus.RESUMED);
+        DownloaderTask downloaderTask=downloaderTaskRepository.save(toEntity(downloaderTaskDTO));
+        downloaderTaskQueue.add(downloaderTask.getId());
+    }
+    @Transactional
+    public void startDownloading(Long id) throws IOException
+    {
+        DownloaderTask downloaderTask=downloaderTaskRepository.findById(id).orElseThrow(()->new DownloaderTaskException(id));
+        String link=downloaderTask.getUrl();
+        //converting into URL
+        URL url=new URL(link);
+        //setting up connection
+        HttpURLConnection con=(HttpURLConnection)url.openConnection();
+        String fileName=downloaderTask.getFileName();
+        long totalSize=downloaderTask.getFileSize();
+        double total=totalSize/(1024.0*1024.0);
         System.out.println("Downloading "+fileName);
         System.out.println("Total Bytes "+totalSize);
         //thread safe variable
-        AtomicLong totalDownloaded = new AtomicLong(0);
+        long totalDownloaded=0;
         //number of threads
         int numberOfThread=4;
         ExecutorService executor= Executors.newFixedThreadPool(numberOfThread);
@@ -77,6 +81,7 @@ public class DownloaderService
         long start=0;
         long end=0;
         List<DownloaderThread> downloaderThreadList=new CopyOnWriteArrayList<>();
+        List<DownloadChunk> downloadChunkList=new CopyOnWriteArrayList<>();
         for(int i=0;i<numberOfThread;i++)
         {
             start=i*chunks;
@@ -89,22 +94,25 @@ public class DownloaderService
                 end=start+chunks-1;
             }
             DownloadChunk downloadChunk=new DownloadChunk();
+            downloadChunk.setDownloaderTask(downloaderTask);
             downloadChunk.setStart(start);
             downloadChunk.setEnd(end);
-            DownloaderThread downloaderThread=new DownloaderThread(link,fileName,downloadChunk,totalDownloaded,task);
+            DownloaderThread downloaderThread=new DownloaderThread(link,fileName,downloadChunk,downloaderTask);
             if(downloadChunk.getDownloadStatus()==DownloadStatus.FAILED)
             {
-                downloaderThread=new DownloaderThread(link,fileName,downloadChunk,totalDownloaded,task);
+                downloaderThread=new DownloaderThread(link,fileName,downloadChunk,downloaderTask);
             }
             downloaderThreadList.add(downloaderThread);
+            downloadChunkList.add(downloadChunk);
             executor.submit(downloaderThread);
         }
+        activeDownloads.put(id,downloaderThreadList);
         ScheduledExecutorService progressExecutor=Executors.newSingleThreadScheduledExecutor();
         long[] previousBytes={0};
         final int Breaktime=2000;
         int currtime[]={0};
         progressExecutor.scheduleAtFixedRate(() -> {
-            long currentBytes=totalDownloaded.get();
+            long currentBytes=downloaderTask.getDownloadedSize();
             long bytesDownloaded=currentBytes-previousBytes[0];
             if(bytesDownloaded==0)
             {
@@ -119,33 +127,37 @@ public class DownloaderService
                     speed / (1024 * 1024)
             );
             previousBytes[0] = currentBytes;
-            if(currentBytes==totalSize) task.setDownloadStatus(DownloadStatus.COMPLETED);
-            if(task.getDownloadStatus()!=DownloadStatus.RESUMED||currtime[0]==Breaktime) progressExecutor.shutdown();
+            if(currentBytes==totalSize)
+            {
+                downloaderTask.setDownloadStatus(DownloadStatus.COMPLETED);
+            }
+            if(downloaderTask.getDownloadStatus()!=DownloadStatus.RESUMED||currtime[0]==Breaktime) progressExecutor.shutdown();
         }, 0, 500, TimeUnit.MILLISECONDS);
-        System.out.println("Downloaded "+totalDownloaded.get());
-        task.setDownloaderThreads(downloaderThreadList);
+        System.out.println("Downloaded "+downloaderTask.getDownloadedSize());
+
         con.disconnect();
     }
-    public void pauseDownload(String link)
+    @Transactional
+    public void pauseDownload(Long id)
     {
-        DownloaderTask task=activeDownloads.get(link);
-        if(task==null) return;
+        DownloaderTask task=downloaderTaskRepository.findById(id).orElseThrow(()->new DownloaderTaskException(id));
         if (task.getDownloadStatus() == DownloadStatus.RESUMED)
         {
             System.out.println(task.getFileName()+" is paused");
             task.setDownloadStatus(DownloadStatus.PAUSED);
         }
-        List<DownloaderThread> downloaderThreadList=task.getDownloaderThreads();
+        List<DownloaderThread> downloaderThreadList=activeDownloads.get(id);
         for(DownloaderThread downloaderThread:downloaderThreadList)
         {
             downloaderThread.pause();
         }
         System.out.println("Downloading is paused");
     }
-    public void cancelDownload(String link)
+    @Transactional
+    public void cancelDownload(Long id)
     {
-        DownloaderTask task=activeDownloads.get(link);
-        pauseDownload(link);
+        DownloaderTask task=downloaderTaskRepository.findById(id).orElseThrow(()->new DownloaderTaskException(id));
+        pauseDownload(task.getId());
         task.setDownloadStatus(DownloadStatus.CANCELED);
         String fileName=task.getFileName();
         Path path= Paths.get(fileName);
@@ -158,5 +170,31 @@ public class DownloaderService
         {
             System.out.println(e.getMessage());
         }
+        downloaderTaskRepository.deleteById(id);
+    }
+    public void resumeDownloader(long id)
+    {
+        downloaderTaskQueue.add(id);
+    }
+    private DownloaderTask toEntity(DownloaderTaskDTO downloaderTaskDTO)
+    {
+        DownloaderTask downloaderTask=new DownloaderTask();
+        downloaderTask.setId(downloaderTaskDTO.getId());
+        downloaderTask.setUrl(downloaderTaskDTO.getUrl());
+        downloaderTask.setDownloadedSize(downloaderTaskDTO.getDownloadedSize());
+        downloaderTask.setFileName(downloaderTaskDTO.getFileName());
+        downloaderTask.setFileSize(downloaderTaskDTO.getFileSize());
+        downloaderTask.setDownloadStatus(downloaderTaskDTO.getDownloadStatus());
+        return downloaderTask;
+    }
+    private DownloaderTaskDTO toDto(DownloaderTask downloaderTask)
+    {
+        DownloaderTaskDTO downloaderTaskDTO=new DownloaderTaskDTO(downloaderTask.getUrl());
+        downloaderTaskDTO.setId(downloaderTask.getId());
+        downloaderTaskDTO.setDownloadedSize(downloaderTask.getDownloadedSize());
+        downloaderTaskDTO.setFileName(downloaderTask.getFileName());
+        downloaderTaskDTO.setFileSize(downloaderTask.getFileSize());
+        downloaderTaskDTO.setDownloadStatus(downloaderTask.getDownloadStatus());
+        return downloaderTaskDTO;
     }
 }

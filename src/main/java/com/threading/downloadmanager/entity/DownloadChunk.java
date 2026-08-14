@@ -1,23 +1,21 @@
 package com.threading.downloadmanager.entity;
 
 import com.threading.downloadmanager.enums.DownloadStatus;
-import lombok.Getter;
-import lombok.Setter;
+import jakarta.persistence.*;
+import lombok.Data;
 
-import java.util.concurrent.atomic.AtomicLong;
-
-@Getter
-@Setter
-
+@Entity
+@Data
 public class DownloadChunk
 {
-    private long start;
-    private long end;
-    private volatile DownloadStatus downloadStatus;
-    private final AtomicLong downloadedBytes = new AtomicLong(0);
-    public void addDownloadedBytes(long bytes)
-    {
-        downloadedBytes.addAndGet(bytes);
-    }
-
+    @Id
+    @GeneratedValue
+    private Long id;
+    private Long start;
+    private Long end;
+    private  DownloadStatus downloadStatus;
+    private Long downloadedBytes;
+    @ManyToOne( fetch = FetchType.LAZY)
+    @JoinColumn(name = "downloaderTask_id", nullable = false)
+    private DownloaderTask downloaderTask;
 }

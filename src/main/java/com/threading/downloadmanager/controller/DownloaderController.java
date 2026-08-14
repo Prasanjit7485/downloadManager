@@ -17,19 +17,19 @@ public class DownloaderController
     @GetMapping("/start")
     public ResponseEntity<String> download(@RequestParam String  url) throws IOException
     {
-        downloaderService.startDownloading(url);
+        downloaderService.addDownloaderTask(url);
         return ResponseEntity.ok("Success");
     }
-    @PutMapping("/pause")
-    public ResponseEntity<String> pause(@RequestParam String  url) throws IOException
+    @PutMapping("/pause/{id}")
+    public ResponseEntity<String> pause(@PathVariable Long id ) throws IOException
     {
-        downloaderService.pauseDownload(url);
+        downloaderService.pauseDownload(id);
         return ResponseEntity.ok("Paused");
     }
-    @DeleteMapping("/cancel")
-    public ResponseEntity<String> cancel(@RequestParam String  url) throws IOException
+    @DeleteMapping("/cancel/{id}")
+    public ResponseEntity<String> cancel(@PathVariable Long id) throws IOException
     {
-        downloaderService.cancelDownload(url);
+        downloaderService.cancelDownload(id);
         return ResponseEntity.ok("Cancelled");
     }
 

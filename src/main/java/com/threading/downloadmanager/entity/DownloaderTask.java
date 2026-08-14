@@ -1,19 +1,21 @@
 package com.threading.downloadmanager.entity;
-import com.threading.downloadmanager.service.DownloaderThread;
-import lombok.Getter;
-import lombok.Setter;
+import jakarta.persistence.*;
+import lombok.Data;
 import com.threading.downloadmanager.enums.DownloadStatus;
-
 import java.util.List;
 
-@Setter
-@Getter
+@Entity
+@Data
 public class DownloaderTask
 {
+    @Id
+    @GeneratedValue
+    private Long id;
     private String url;
     private String fileName;
     private Long downloadedSize;
     private Long fileSize;
-    private volatile DownloadStatus downloadStatus;
-    private List<DownloaderThread> downloaderThreads;
+    private DownloadStatus downloadStatus;
+    @OneToMany(mappedBy="downloadChunk",fetch=FetchType.LAZY)
+    private List<DownloadChunk> downloadChunkList;
 }
