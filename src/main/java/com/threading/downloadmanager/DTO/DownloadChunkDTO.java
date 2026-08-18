@@ -10,4 +10,5 @@ public class DownloadChunkDTO
     private long end;
     private  DownloadStatus downloadStatus;
     private Long downloadedBytes;
+    private Long downloaderTaskId;
 }

@@ -10,6 +10,7 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
+import java.util.List;
 
 @RestController
 @RequestMapping("/download")
@@ -17,10 +18,22 @@ public class DownloaderController
 {
     @Autowired
     DownloaderService downloaderService;
-    @GetMapping("/start")
-    public ResponseEntity<String> download(@Valid @RequestBody DownloaderTaskDTO downloaderTaskDTO) throws IOException
+    @GetMapping("/all")
+    public ResponseEntity<List<DownloaderTaskDTO>> getAllDownloaderTasks()
     {
-        downloaderService.addDownloaderTask(downloaderTaskDTO);
+        return ResponseEntity.ok(downloaderService.getAllDownloaderTask());
+    }
+
+    @PostMapping("/add")
+    public ResponseEntity<String> download(@RequestParam String url) throws IOException
+    {
+        downloaderService.addDownloaderTask(url);
+        return ResponseEntity.ok("Success");
+    }
+    @PostMapping("/start")
+    public ResponseEntity<String> startdownload() throws IOException
+    {
+        downloaderService.startQueueDownloading();
         return ResponseEntity.ok("Success");
     }
     @PutMapping("/pause/{id}")

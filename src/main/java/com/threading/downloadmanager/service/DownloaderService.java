@@ -1,10 +1,12 @@
 package com.threading.downloadmanager.service;
 
+import com.threading.downloadmanager.DTO.DownloadChunkDTO;
 import com.threading.downloadmanager.DTO.DownloaderTaskDTO;
 import com.threading.downloadmanager.entity.DownloadChunk;
 import com.threading.downloadmanager.entity.DownloaderTask;
 import com.threading.downloadmanager.enums.DownloadStatus;
 import com.threading.downloadmanager.exception.DownloaderTaskException;
+import com.threading.downloadmanager.repository.DownloadChunkRepository;
 import com.threading.downloadmanager.repository.DownloaderTaskRepository;
 import jakarta.transaction.Transactional;
 import org.springframework.stereotype.Service;
@@ -18,20 +20,27 @@ import java.nio.file.Paths;
 import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Service
 public class DownloaderService
 {
     private final DownloaderTaskRepository downloaderTaskRepository;
-    public DownloaderService(DownloaderTaskRepository downloaderTaskRepository)
+    private final DownloadChunkRepository downloadChunkRepository;
+    //Constructor
+    public DownloaderService(DownloaderTaskRepository downloaderTaskRepository, DownloadChunkRepository downloadChunkRepository)
     {
         this.downloaderTaskRepository = downloaderTaskRepository;
+        this.downloadChunkRepository = downloadChunkRepository;
     }
     //Thread Safe HashMap use for storage the task
     ConcurrentHashMap<Long, List<DownloaderThread>> activeDownloads = new ConcurrentHashMap<>();
+    //queue of downloading task
     Queue<Long> downloaderTaskQueue = new ConcurrentLinkedQueue<>();
-    public void addDownloaderTask(DownloaderTaskDTO downloaderTaskDTO) throws IOException {
-        String link=downloaderTaskDTO.getUrl();
+
+    //adding task in the queue;
+    public void addDownloaderTask(String link) throws IOException {
+
         URL url=new URL(link);
         HttpURLConnection con=(HttpURLConnection)url.openConnection();
         String fileName="";
@@ -52,16 +61,21 @@ public class DownloaderService
         {
             fileName=fileName.substring(0,fileName.indexOf('.'))+ System.currentTimeMillis()+fileName.substring(fileName.indexOf('.'));
         }
-        downloaderTaskDTO.setFileName(fileName);
-        downloaderTaskDTO.setFileSize(totalSize);
-        downloaderTaskDTO.setDownloadStatus(DownloadStatus.RESUMED);
-        DownloaderTask downloaderTask=downloaderTaskRepository.save(toEntity(downloaderTaskDTO));
+        DownloaderTask task=new DownloaderTask();
+        task.setUrl(link);
+        task.setFileName(fileName);
+        task.setFileSize(totalSize);
+        task.setDownloadedSize(0L);
+        task.setDownloadStatus(DownloadStatus.QUEUED);
+        DownloaderTask downloaderTask=downloaderTaskRepository.save(task);
         downloaderTaskQueue.add(downloaderTask.getId());
+        con.disconnect();
     }
     @Transactional
     public void startDownloading(Long id) throws IOException
     {
         DownloaderTask downloaderTask=downloaderTaskRepository.findById(id).orElseThrow(()->new DownloaderTaskException(id));
+        downloaderTask.setDownloadStatus(DownloadStatus.RESUMED);
         String link=downloaderTask.getUrl();
         //converting into URL
         URL url=new URL(link);
@@ -69,19 +83,21 @@ public class DownloaderService
         HttpURLConnection con=(HttpURLConnection)url.openConnection();
         String fileName=downloaderTask.getFileName();
         long totalSize=downloaderTask.getFileSize();
-        double total=totalSize/(1024.0*1024.0);
+        //double total=totalSize/(1024.0*1024.0);
         System.out.println("Downloading "+fileName);
         System.out.println("Total Bytes "+totalSize);
         //thread safe variable
-        long totalDownloaded=0;
+        AtomicLong downloadedBytes =
+                new AtomicLong(0);
+        //long totalDownloaded=0;
         //number of threads
         int numberOfThread=4;
         ExecutorService executor= Executors.newFixedThreadPool(numberOfThread);
         long chunks=totalSize/numberOfThread;
-        long start=0;
-        long end=0;
+        long start;
+        long end;
         List<DownloaderThread> downloaderThreadList=new CopyOnWriteArrayList<>();
-        List<DownloadChunk> downloadChunkList=new CopyOnWriteArrayList<>();
+        List<DownloadChunk> downloadChunkList=downloaderTask.getDownloadChunkList();
         for(int i=0;i<numberOfThread;i++)
         {
             start=i*chunks;
@@ -93,18 +109,34 @@ public class DownloaderService
             {
                 end=start+chunks-1;
             }
-            DownloadChunk downloadChunk=new DownloadChunk();
-            downloadChunk.setDownloaderTask(downloaderTask);
-            downloadChunk.setStart(start);
-            downloadChunk.setEnd(end);
-            DownloaderThread downloaderThread=new DownloaderThread(link,fileName,downloadChunk,downloaderTask);
+            DownloadChunk downloadChunk;
+            if(downloaderTask.getDownloadChunkList().size()>i)
+            {
+                downloadChunk=downloaderTask.getDownloadChunkList().get(i);
+            }
+            else
+            {
+                downloadChunk=new DownloadChunk();
+                downloadChunk.setDownloadedBytes(0L);
+                downloadChunk.setDownloaderTask(downloaderTask);
+                downloadChunk.setStartByte(start);
+                downloadChunk.setEndByte(end);
+            }
+            downloadChunk.setDownloadStatus(DownloadStatus.RESUMED);
+            System.out.println("1");
+            DownloaderThread downloaderThread=new DownloaderThread(link,fileName,downloadChunk,downloaderTask,downloadedBytes,downloadChunkRepository);
             if(downloadChunk.getDownloadStatus()==DownloadStatus.FAILED)
             {
-                downloaderThread=new DownloaderThread(link,fileName,downloadChunk,downloaderTask);
+                downloaderThread=new DownloaderThread(link,fileName,downloadChunk,downloaderTask,downloadedBytes,downloadChunkRepository);
             }
             downloaderThreadList.add(downloaderThread);
             downloadChunkList.add(downloadChunk);
+            downloadChunkRepository.save(downloadChunk);
             executor.submit(downloaderThread);
+            if(downloaderTask.getDownloadChunkList().size()>i)
+            {
+                downloaderTask.getDownloadChunkList().set(i,downloadChunk);
+            }
         }
         activeDownloads.put(id,downloaderThreadList);
         ScheduledExecutorService progressExecutor=Executors.newSingleThreadScheduledExecutor();
@@ -112,7 +144,7 @@ public class DownloaderService
         final int Breaktime=2000;
         int currtime[]={0};
         progressExecutor.scheduleAtFixedRate(() -> {
-            long currentBytes=downloaderTask.getDownloadedSize();
+            long currentBytes=downloadedBytes.get();
             long bytesDownloaded=currentBytes-previousBytes[0];
             if(bytesDownloaded==0)
             {
@@ -133,8 +165,8 @@ public class DownloaderService
             }
             if(downloaderTask.getDownloadStatus()!=DownloadStatus.RESUMED||currtime[0]==Breaktime) progressExecutor.shutdown();
         }, 0, 500, TimeUnit.MILLISECONDS);
+        downloaderTask.setDownloadedSize(downloaderTask.getDownloadedSize()+downloadedBytes.get());
         System.out.println("Downloaded "+downloaderTask.getDownloadedSize());
-
         con.disconnect();
     }
     @Transactional
@@ -147,11 +179,35 @@ public class DownloaderService
             task.setDownloadStatus(DownloadStatus.PAUSED);
         }
         List<DownloaderThread> downloaderThreadList=activeDownloads.get(id);
+        if (downloaderThreadList == null) {
+            return;
+        }
         for(DownloaderThread downloaderThread:downloaderThreadList)
         {
             downloaderThread.pause();
         }
         System.out.println("Downloading is paused");
+    }
+    public List<DownloaderTaskDTO>  getAllDownloaderTask()
+    {
+        List<DownloaderTask> downloaderTaskList=downloaderTaskRepository.findAll();
+        List<DownloaderTaskDTO>
+                downloaderTaskDTOList=new CopyOnWriteArrayList<>();
+        for(DownloaderTask downloaderTask:downloaderTaskList) downloaderTaskDTOList.add(toDto(downloaderTask));
+        return downloaderTaskDTOList;
+    }
+    public void startQueueDownloading() throws IOException {
+        if(downloaderTaskQueue.isEmpty())
+        {
+            List<DownloaderTask> downloaderTaskList=downloaderTaskRepository.findAllByDownloadStatus(DownloadStatus.RESUMED);
+            for(DownloaderTask downloaderTask:downloaderTaskList) downloaderTaskQueue.add(downloaderTask.getId());
+        }
+        while(!downloaderTaskQueue.isEmpty())
+        {
+            Long id=downloaderTaskQueue.poll();
+            System.out.println(id);
+            startDownloading(id);
+        }
     }
     @Transactional
     public void cancelDownload(Long id)
@@ -195,6 +251,20 @@ public class DownloaderService
         downloaderTaskDTO.setFileName(downloaderTask.getFileName());
         downloaderTaskDTO.setFileSize(downloaderTask.getFileSize());
         downloaderTaskDTO.setDownloadStatus(downloaderTask.getDownloadStatus());
+        List<DownloadChunkDTO> downloadChunkDTOS=new CopyOnWriteArrayList<>();
+        for(DownloadChunk downloadChunk:downloaderTask.getDownloadChunkList()) downloadChunkDTOS.add(toChunkDto(downloadChunk));
+        downloaderTaskDTO.setDownloadChunkListDTO(downloadChunkDTOS);
         return downloaderTaskDTO;
+    }
+    private DownloadChunkDTO toChunkDto(DownloadChunk downloadChunk)
+    {
+        DownloadChunkDTO downloadChunkDTO=new DownloadChunkDTO();
+        downloadChunkDTO.setId(downloadChunk.getId());
+        downloadChunkDTO.setDownloadedBytes(downloadChunk.getDownloadedBytes());
+        downloadChunkDTO.setStart(downloadChunk.getStartByte());
+        downloadChunkDTO.setEnd(downloadChunk.getEndByte());
+        downloadChunkDTO.setDownloadStatus(downloadChunk.getDownloadStatus());
+        downloadChunkDTO.setDownloaderTaskId(downloadChunk.getDownloaderTask().getId());
+        return downloadChunkDTO;
     }
 }

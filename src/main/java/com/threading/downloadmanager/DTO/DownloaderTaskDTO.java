@@ -1,5 +1,6 @@
 package com.threading.downloadmanager.DTO;
 
+import com.threading.downloadmanager.entity.DownloadChunk;
 import com.threading.downloadmanager.enums.DownloadStatus;
 import com.threading.downloadmanager.service.DownloaderThread;
 import lombok.Data;
@@ -16,5 +17,5 @@ public class DownloaderTaskDTO {
     private Long downloadedSize;
     private Long fileSize;
     private DownloadStatus downloadStatus;
-    private List<DownloaderThread> downloaderThreads;
+    private List<DownloadChunkDTO> downloadChunkListDTO;
 }

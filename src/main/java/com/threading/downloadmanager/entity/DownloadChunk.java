@@ -6,13 +6,15 @@ import lombok.Data;
 
 @Entity
 @Data
+@Table(name = "download_chunk")
 public class DownloadChunk
 {
     @Id
     @GeneratedValue
     private Long id;
-    private Long start;
-    private Long end;
+    private Long startByte;
+    private Long endByte;
+    @Enumerated(EnumType.STRING)
     private  DownloadStatus downloadStatus;
     private Long downloadedBytes;
     @ManyToOne( fetch = FetchType.LAZY)
