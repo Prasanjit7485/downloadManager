@@ -17,7 +17,9 @@ import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Queue;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
@@ -39,12 +41,12 @@ public class DownloaderService
     Queue<Long> downloaderTaskQueue = new ConcurrentLinkedQueue<>();
 
     //adding task in the queue;
-    public void addDownloaderTask(String link) throws IOException {
-
+    public void addDownloaderTask(String link) throws IOException
+    {
         URL url=new URL(link);
         HttpURLConnection con=(HttpURLConnection)url.openConnection();
         String fileName="";
-        long totalSize=con.getContentLength();
+        long totalSize=con.getContentLengthLong();
         String disposition=con.getHeaderField("Content-Disposition");
         if(disposition!=null&&disposition.contains("filename="))
         {
@@ -71,9 +73,9 @@ public class DownloaderService
         downloaderTaskQueue.add(downloaderTask.getId());
         con.disconnect();
     }
+    //starting the queue
     @Transactional
-    public void startDownloading(Long id) throws IOException
-    {
+    public void startDownloading(Long id) throws IOException, ExecutionException, InterruptedException {
         DownloaderTask downloaderTask=downloaderTaskRepository.findById(id).orElseThrow(()->new DownloaderTaskException(id));
         downloaderTask.setDownloadStatus(DownloadStatus.RESUMED);
         String link=downloaderTask.getUrl();
@@ -86,18 +88,20 @@ public class DownloaderService
         //double total=totalSize/(1024.0*1024.0);
         System.out.println("Downloading "+fileName);
         System.out.println("Total Bytes "+totalSize);
-        //thread safe variable
-        AtomicLong downloadedBytes =
-                new AtomicLong(0);
+        //thread safe variable for total downloaded bytes
+        AtomicLong downloadedBytes=new AtomicLong(0);
         //long totalDownloaded=0;
         //number of threads
         int numberOfThread=4;
+        List<Future<?>> futures = new ArrayList<>();
         ExecutorService executor= Executors.newFixedThreadPool(numberOfThread);
         long chunks=totalSize/numberOfThread;
         long start;
         long end;
+
         List<DownloaderThread> downloaderThreadList=new CopyOnWriteArrayList<>();
         List<DownloadChunk> downloadChunkList=downloaderTask.getDownloadChunkList();
+
         for(int i=0;i<numberOfThread;i++)
         {
             start=i*chunks;
@@ -123,34 +127,38 @@ public class DownloaderService
                 downloadChunk.setEndByte(end);
             }
             downloadChunk.setDownloadStatus(DownloadStatus.RESUMED);
-            System.out.println("1");
             DownloaderThread downloaderThread=new DownloaderThread(link,fileName,downloadChunk,downloaderTask,downloadedBytes,downloadChunkRepository);
             if(downloadChunk.getDownloadStatus()==DownloadStatus.FAILED)
             {
                 downloaderThread=new DownloaderThread(link,fileName,downloadChunk,downloaderTask,downloadedBytes,downloadChunkRepository);
             }
+
             downloaderThreadList.add(downloaderThread);
             downloadChunkList.add(downloadChunk);
             downloadChunkRepository.save(downloadChunk);
-            executor.submit(downloaderThread);
+            Future<?> future = executor.submit(downloaderThread);
+            futures.add(future);
             if(downloaderTask.getDownloadChunkList().size()>i)
             {
                 downloaderTask.getDownloadChunkList().set(i,downloadChunk);
             }
         }
+        //adding downloaderThreadList to concurrent hashmap for further use
         activeDownloads.put(id,downloaderThreadList);
+        //scheduler for showing downloader progress
         ScheduledExecutorService progressExecutor=Executors.newSingleThreadScheduledExecutor();
         long[] previousBytes={0};
         final int Breaktime=2000;
-        int currtime[]={0};
+        int currTime[]={0};
+
         progressExecutor.scheduleAtFixedRate(() -> {
             long currentBytes=downloadedBytes.get();
             long bytesDownloaded=currentBytes-previousBytes[0];
             if(bytesDownloaded==0)
             {
-                currtime[0]+=500;
+                currTime[0]+=500;
             }
-            else if(bytesDownloaded>0) currtime[0]=0;
+            else if(bytesDownloaded>0) currTime[0]=0;
             double speed=bytesDownloaded/0.5;
             double progress = ((double)currentBytes/totalSize)* 100.0;
             System.out.printf(
@@ -159,16 +167,25 @@ public class DownloaderService
                     speed / (1024 * 1024)
             );
             previousBytes[0] = currentBytes;
-            if(currentBytes==totalSize)
-            {
-                downloaderTask.setDownloadStatus(DownloadStatus.COMPLETED);
-            }
-            if(downloaderTask.getDownloadStatus()!=DownloadStatus.RESUMED||currtime[0]==Breaktime) progressExecutor.shutdown();
+            if(downloaderTask.getDownloadStatus()!=DownloadStatus.RESUMED||currTime[0]==Breaktime) progressExecutor.shutdown();
         }, 0, 500, TimeUnit.MILLISECONDS);
+
+        for(Future<?> future:futures)
+        {
+            future.get();
+        }
         downloaderTask.setDownloadedSize(downloaderTask.getDownloadedSize()+downloadedBytes.get());
         System.out.println("Downloaded "+downloaderTask.getDownloadedSize());
+        if(Objects.equals(downloaderTask.getDownloadedSize(), downloaderTask.getFileSize()))
+        {
+            downloaderTask.setDownloadStatus(DownloadStatus.COMPLETED);
+        }
+        downloaderTaskRepository.save(downloaderTask);
+        executor.shutdown();        
         con.disconnect();
     }
+
+    //pause the current download
     @Transactional
     public void pauseDownload(Long id)
     {
@@ -196,10 +213,11 @@ public class DownloaderService
         for(DownloaderTask downloaderTask:downloaderTaskList) downloaderTaskDTOList.add(toDto(downloaderTask));
         return downloaderTaskDTOList;
     }
-    public void startQueueDownloading() throws IOException {
+    //starting download
+    public void startQueueDownloading() throws IOException, ExecutionException, InterruptedException {
         if(downloaderTaskQueue.isEmpty())
         {
-            List<DownloaderTask> downloaderTaskList=downloaderTaskRepository.findAllByDownloadStatus(DownloadStatus.RESUMED);
+            List<DownloaderTask> downloaderTaskList=downloaderTaskRepository.findAllByDownloadStatus(DownloadStatus.QUEUED);
             for(DownloaderTask downloaderTask:downloaderTaskList) downloaderTaskQueue.add(downloaderTask.getId());
         }
         while(!downloaderTaskQueue.isEmpty())
@@ -207,8 +225,10 @@ public class DownloaderService
             Long id=downloaderTaskQueue.poll();
             System.out.println(id);
             startDownloading(id);
+           
         }
     }
+    //cancellation of Download
     @Transactional
     public void cancelDownload(Long id)
     {
@@ -228,10 +248,12 @@ public class DownloaderService
         }
         downloaderTaskRepository.deleteById(id);
     }
+    //resumeDownloader
     public void resumeDownloader(long id)
     {
         downloaderTaskQueue.add(id);
     }
+    //downloaderTaskDTO to downloaderTask
     private DownloaderTask toEntity(DownloaderTaskDTO downloaderTaskDTO)
     {
         DownloaderTask downloaderTask=new DownloaderTask();
@@ -243,6 +265,7 @@ public class DownloaderService
         downloaderTask.setDownloadStatus(downloaderTaskDTO.getDownloadStatus());
         return downloaderTask;
     }
+    //downloaderTask to downloaderTaskDTO
     private DownloaderTaskDTO toDto(DownloaderTask downloaderTask)
     {
         DownloaderTaskDTO downloaderTaskDTO=new DownloaderTaskDTO(downloaderTask.getUrl());
@@ -256,6 +279,7 @@ public class DownloaderService
         downloaderTaskDTO.setDownloadChunkListDTO(downloadChunkDTOS);
         return downloaderTaskDTO;
     }
+    //downloadChunk to downloadChunkDTO
     private DownloadChunkDTO toChunkDto(DownloadChunk downloadChunk)
     {
         DownloadChunkDTO downloadChunkDTO=new DownloadChunkDTO();

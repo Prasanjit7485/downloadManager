@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
 
 @RestController
 @RequestMapping("/download")
@@ -31,8 +32,7 @@ public class DownloaderController
         return ResponseEntity.ok("Success");
     }
     @PostMapping("/start")
-    public ResponseEntity<String> startdownload() throws IOException
-    {
+    public ResponseEntity<String> startdownload() throws IOException, ExecutionException, InterruptedException {
         downloaderService.startQueueDownloading();
         return ResponseEntity.ok("Success");
     }

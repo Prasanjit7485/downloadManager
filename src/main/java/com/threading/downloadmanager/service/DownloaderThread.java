@@ -32,7 +32,6 @@ public class DownloaderThread implements Runnable {
     {
         try
         {
-            System.out.println(2);
             URL url = new URL(link);
             con=(HttpURLConnection) url.openConnection();
             con.setRequestMethod("GET");
