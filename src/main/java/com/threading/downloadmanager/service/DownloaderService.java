@@ -190,19 +190,17 @@ public class DownloaderService
     public void pauseDownload(Long id)
     {
         DownloaderTask task=downloaderTaskRepository.findById(id).orElseThrow(()->new DownloaderTaskException(id));
-        if (task.getDownloadStatus() == DownloadStatus.RESUMED)
-        {
-            System.out.println(task.getFileName()+" is paused");
-            task.setDownloadStatus(DownloadStatus.PAUSED);
-        }
         List<DownloaderThread> downloaderThreadList=activeDownloads.get(id);
-        if (downloaderThreadList == null) {
+        if (downloaderThreadList == null)
+        {
             return;
         }
         for(DownloaderThread downloaderThread:downloaderThreadList)
         {
             downloaderThread.pause();
         }
+        task.setDownloadStatus(DownloadStatus.PAUSED);
+        downloaderTaskRepository.save(task);
         System.out.println("Downloading is paused");
     }
     public List<DownloaderTaskDTO>  getAllDownloaderTask()
@@ -246,12 +244,12 @@ public class DownloaderService
         {
             System.out.println(e.getMessage());
         }
+        for(DownloadChunk downloadChunk:task.getDownloadChunkList())  downloadChunkRepository.delete(downloadChunk);
         downloaderTaskRepository.deleteById(id);
     }
     //resumeDownloader
-    public void resumeDownloader(long id)
-    {
-        downloaderTaskQueue.add(id);
+    public void resumeDownloader(Long id) throws IOException, ExecutionException, InterruptedException {
+        startDownloading(id);
     }
     //downloaderTaskDTO to downloaderTask
     private DownloaderTask toEntity(DownloaderTaskDTO downloaderTaskDTO)

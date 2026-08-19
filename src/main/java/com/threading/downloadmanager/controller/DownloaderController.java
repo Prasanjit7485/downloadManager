@@ -2,11 +2,8 @@ package com.threading.downloadmanager.controller;
 
 import com.threading.downloadmanager.DTO.DownloaderTaskDTO;
 import com.threading.downloadmanager.service.DownloaderService;
-import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
@@ -32,7 +29,7 @@ public class DownloaderController
         return ResponseEntity.ok("Success");
     }
     @PostMapping("/start")
-    public ResponseEntity<String> startdownload() throws IOException, ExecutionException, InterruptedException {
+    public ResponseEntity<String> startDownload() throws IOException, ExecutionException, InterruptedException {
         downloaderService.startQueueDownloading();
         return ResponseEntity.ok("Success");
     }
@@ -41,6 +38,11 @@ public class DownloaderController
     {
         downloaderService.pauseDownload(id);
         return ResponseEntity.ok("Paused");
+    }
+    @PutMapping("/resume/{id}")
+    public ResponseEntity<String> resumeDownload(@PathVariable Long id) throws IOException, ExecutionException, InterruptedException {
+        downloaderService.resumeDownloader(id);
+        return ResponseEntity.ok("Resumed");
     }
     @DeleteMapping("/cancel/{id}")
     public ResponseEntity<String> cancel(@PathVariable Long id) throws IOException

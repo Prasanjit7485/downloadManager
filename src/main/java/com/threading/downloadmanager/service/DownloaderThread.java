@@ -38,6 +38,8 @@ public class DownloaderThread implements Runnable {
             long start=downloadChunk.getStartByte()+downloadChunk.getDownloadedBytes();
             long end=downloadChunk.getEndByte();
             if(start>end) return;
+            con.setRequestProperty("User-Agent",
+                    "Mozilla/5.0");
             con.setRequestProperty("Range", "bytes=" + start + "-" + end);
             con.connect();
             System.out.println(3);
@@ -76,7 +78,11 @@ public class DownloaderThread implements Runnable {
             {
                 downloadChunk.setDownloadStatus(DownloadStatus.COMPLETED);
             }
-            else if(downloadChunk.getDownloadStatus()!=DownloadStatus.PAUSED)
+            else if(downloaderTask.getDownloadStatus()==DownloadStatus.PAUSED)
+            {
+                downloadChunk.setDownloadStatus(DownloadStatus.PAUSED);
+            }
+            else
             {
                 downloadChunk.setDownloadStatus(DownloadStatus.FAILED);
             }
